@@ -32,7 +32,32 @@
 
 /* Private typedef -----------------------------------------------------------*/
 /* USER CODE BEGIN PTD */
-
+typedef struct
+{
+  uint8_t ov;    // 过压
+  uint8_t uv;    // 欠压
+  uint8_t open;  // 开路
+  uint8_t spike; // 突变
+} CellFault_t;
+typedef enum
+{
+  AMS_INIT = 0,
+  AMS_SELF_TEST,
+  AMS_STANDBY,
+  AMS_PRECHARGE,
+  AMS_DRIVE,
+  AMS_FAULT,
+  AMS_SHUTDOWN
+} AMS_State_t;
+typedef struct
+{
+  uint8_t ov;
+  uint8_t uv;
+  uint8_t ot;
+  uint8_t ut;
+  uint8_t open;
+  uint8_t comm;
+} AMS_Fault_t;
 /* USER CODE END PTD */
 
 /* Private define ------------------------------------------------------------*/
@@ -56,15 +81,9 @@
 
 /* USER CODE BEGIN PV */
 uint16_t cell_raw[TOTAL_CELL]; // 存储所有电池的电压
-typedef struct
-{
-  uint8_t ov;    // 过压
-  uint8_t uv;    // 欠压
-  uint8_t open;  // 开路
-  uint8_t spike; // 突变
-} CellFault_t;
-
 CellFault_t fault[15];
+AMS_Fault_t ams_fault;
+AMS_State_t AMS_State = AMS_INIT;
 float last_voltage[15] = {0};
 /* USER CODE END PV */
 
@@ -72,6 +91,8 @@ float last_voltage[15] = {0};
 
 /* USER CODE BEGIN PFP */
 void SystemClock_Config(void);
+
+
 void LTC6811_read_15cells(uint16_t *cell)
 {
   uint8_t rxA[TOTAL_IC * 8]; // C1~C3
@@ -116,6 +137,8 @@ void LTC6811_read_15cells(uint16_t *cell)
     }
   }
 }
+
+
 uint16_t pec15_calc(uint8_t len, uint8_t *data)
 {
   uint16_t remainder = 16;
@@ -134,18 +157,24 @@ uint16_t pec15_calc(uint8_t len, uint8_t *data)
   }
   return remainder << 1;
 }
+
+
 void spi_txrx(uint8_t *tx, uint8_t *rx, uint16_t len)
 {
   CS_LOW();
   HAL_SPI_TransmitReceive(&hspi1, tx, rx, len, 100);
   CS_HIGH();
 }
+
+
 void LTC6811_wakeup(void)
 {
   CS_LOW();
   HAL_Delay(1);
   CS_HIGH();
 }
+
+
 void LTC6811_cmd(uint8_t cmd0, uint8_t cmd1)
 {
   uint8_t buf[4];
@@ -161,6 +190,8 @@ void LTC6811_cmd(uint8_t cmd0, uint8_t cmd1)
   HAL_SPI_Transmit(&hspi1, buf, 4, 100);
   CS_HIGH();
 }
+
+
 void LTC6811_read_reg(uint8_t cmd0, uint8_t cmd1, uint8_t *rx)
 {
   uint8_t tx[4 + TOTAL_IC * 8];
@@ -184,6 +215,8 @@ void LTC6811_read_reg(uint8_t cmd0, uint8_t cmd1, uint8_t *rx)
   for (int i = 0; i < TOTAL_IC * 8; i++)
     rx[i] = rx_buf[i + 4];
 }
+
+
 void uart_dma_transmit(const char *message)
 {
   HAL_UART_Transmit_DMA(&huart1, (uint8_t *)message, strlen(message));
@@ -192,6 +225,8 @@ void uart_dma_transmit(const char *message)
     // 等待DMA完成
   }
 }
+
+
 void check_voltage_fault(uint16_t *raw)
 {
   for (int i = 0; i < 15; i++)
@@ -202,6 +237,8 @@ void check_voltage_fault(uint16_t *raw)
     fault[i].uv = (v < UV_THRESHOLD);
   }
 }
+
+
 void check_open_wire(uint16_t *raw)
 {
   for (int i = 0; i < 15; i++)
@@ -216,6 +253,8 @@ void check_open_wire(uint16_t *raw)
     }
   }
 }
+
+
 void check_spike(uint16_t *raw)
 {
   for (int i = 0; i < 15; i++)
@@ -234,6 +273,8 @@ void check_spike(uint16_t *raw)
     last_voltage[i] = v;
   }
 }
+
+
 uint8_t check_pec(uint8_t *data, uint16_t len)
 {
   uint16_t received = (data[len - 2] << 8) | data[len - 1];
@@ -241,11 +282,58 @@ uint8_t check_pec(uint8_t *data, uint16_t len)
 
   return (received != calc);
 }
+
+
 void BMS_FaultDetect(uint16_t *cell_raw)
 {
   check_voltage_fault(cell_raw);
   check_open_wire(cell_raw);
   check_spike(cell_raw);
+}
+
+
+void AMS_StateMachine(void)
+{
+  switch (AMS_State)
+  {
+  case AMS_INIT:
+    AMS_State = AMS_SELF_TEST;
+    break;
+
+  case AMS_SELF_TEST:
+    if (SelfTest_OK())
+      AMS_State = AMS_STANDBY;
+    else
+      AMS_State = AMS_FAULT;
+    break;
+
+  case AMS_STANDBY:
+    if (TS_Request())
+      AMS_State = AMS_PRECHARGE;
+    break;
+
+  case AMS_PRECHARGE:
+    if (Precharge_OK())
+      AMS_State = AMS_DRIVE;
+    else if (Precharge_Timeout())
+      AMS_State = AMS_FAULT;
+    break;
+
+  case AMS_DRIVE:
+    BMS_FaultDetect(cell_raw);
+
+    if (Fault_Exist())
+      AMS_State = AMS_FAULT;
+    break;
+
+  case AMS_FAULT:
+    AMS_HandleFault();
+    AMS_State = AMS_SHUTDOWN;
+    break;
+
+  case AMS_SHUTDOWN:
+    break;
+  }
 }
 /* USER CODE END PFP */
 
@@ -303,8 +391,10 @@ int main(void)
     for (int i = 0; i < 15; i++)
     {
       if (fault[i].ov)
+      {
+        
         printf("Cell %d OV!\r\n", i + 1);
-
+      }
       if (fault[i].uv)
         printf("Cell %d UV!\r\n", i + 1);
 
@@ -314,7 +404,9 @@ int main(void)
       if (fault[i].spike)
         printf("Cell %d SPIKE!\r\n", i + 1);
     }
-    
+
+    AMS_StateMachine();
+
     // 打印电压
     char buffer[128];
     snprintf(buffer, sizeof(buffer), "Cell Voltages:\r\n");
@@ -330,7 +422,7 @@ int main(void)
     snprintf(buffer, sizeof(buffer), "----------------------\r\n");
     uart_dma_transmit(buffer);
 
-    HAL_Delay(1000);
+    HAL_Delay(100);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
