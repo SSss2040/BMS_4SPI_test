@@ -39,16 +39,6 @@ typedef struct
   uint8_t open;  // 开路
   uint8_t spike; // 突变
 } CellFault_t;
-typedef enum
-{
-  AMS_INIT = 0,
-  AMS_SELF_TEST,
-  AMS_STANDBY,
-  AMS_PRECHARGE,
-  AMS_DRIVE,
-  AMS_FAULT,
-  AMS_SHUTDOWN
-} AMS_State_t;
 typedef struct
 {
   uint8_t ov;
@@ -290,50 +280,6 @@ void BMS_FaultDetect(uint16_t *cell_raw)
   check_spike(cell_raw);
 }
 
-
-void AMS_StateMachine(void)
-{
-  switch (AMS_State)
-  {
-  case AMS_INIT:
-    AMS_State = AMS_SELF_TEST;
-    break;
-
-  case AMS_SELF_TEST:
-    if (SelfTest_OK())
-      AMS_State = AMS_STANDBY;
-    else
-      AMS_State = AMS_FAULT;
-    break;
-
-  case AMS_STANDBY:
-    if (TS_Request())
-      AMS_State = AMS_PRECHARGE;
-    break;
-
-  case AMS_PRECHARGE:
-    if (Precharge_OK())
-      AMS_State = AMS_DRIVE;
-    else if (Precharge_Timeout())
-      AMS_State = AMS_FAULT;
-    break;
-
-  case AMS_DRIVE:
-    BMS_FaultDetect(cell_raw);
-
-    if (Fault_Exist())
-      AMS_State = AMS_FAULT;
-    break;
-
-  case AMS_FAULT:
-    AMS_HandleFault();
-    AMS_State = AMS_SHUTDOWN;
-    break;
-
-  case AMS_SHUTDOWN:
-    break;
-  }
-}
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -403,8 +349,6 @@ int main(void)
       if (fault[i].spike)
         printf("Cell %d SPIKE!\r\n", i + 1);
     }
-
-    AMS_StateMachine();
 
     // 打印电压
     char buffer[128];
