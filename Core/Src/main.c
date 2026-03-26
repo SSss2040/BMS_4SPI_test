@@ -25,9 +25,11 @@
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
-#include <string.h>
+#include "ltc6811.h"
 #include <stdint.h>
 #include <stdio.h>
+#include <string.h>
+
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -55,11 +57,14 @@ typedef struct
 #define TOTAL_IC 3
 #define CELL_PER_IC 5
 #define TOTAL_CELL 15
-#define CS_LOW() HAL_GPIO_WritePin(SPI_CS__GPIO_Port, SPI_CS__Pin, GPIO_PIN_RESET)
-#define CS_HIGH() HAL_GPIO_WritePin(SPI_CS__GPIO_Port, SPI_CS__Pin, GPIO_PIN_SET)
+#define CS_LOW() HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_RESET)
+#define CS_HIGH() HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_SET)
 #define OV_THRESHOLD 4.20f
 #define UV_THRESHOLD 2.50f
 #define SPIKE_THRESHOLD 0.5f
+#define FAULT_COUNT_TH 3   // 连续3次触发
+#define RECOVER_COUNT_TH 3 // 连续3次恢复
+#define COMM_FAULT_TH 3
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -73,8 +78,12 @@ typedef struct
 uint16_t cell_raw[TOTAL_CELL]; // 存储所有电池的电压
 CellFault_t fault[15];
 AMS_Fault_t ams_fault;
-AMS_State_t AMS_State = AMS_INIT;
 float last_voltage[15] = {0};
+uint8_t ov_cnt[15] = {0};
+uint8_t uv_cnt[15] = {0};
+uint8_t open_cnt[15] = {0};
+uint8_t spike_cnt[15] = {0};
+uint8_t comm_cnt = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -215,54 +224,82 @@ void uart_dma_transmit(const char *message)
   }
 }
 
-
-void check_voltage_fault(uint16_t *raw)
-{
-  for (int i = 0; i < 15; i++)
-  {
+void check_voltage_fault(uint16_t *raw) {
+  for (int i = 0; i < 15; i++) {
     float v = raw[i] * 0.0001f;
 
-    fault[i].ov = (v > OV_THRESHOLD);
-    fault[i].uv = (v < UV_THRESHOLD);
+    // ===== 过压 =====
+    if (v > OV_THRESHOLD) {
+      if (ov_cnt[i] < FAULT_COUNT_TH)
+        ov_cnt[i]++;
+
+      if (ov_cnt[i] >= FAULT_COUNT_TH)
+        fault[i].ov = 1;
+    } else {
+      if (ov_cnt[i] > 0)
+        ov_cnt[i]--;
+
+      if (ov_cnt[i] == 0)
+        fault[i].ov = 0;
+    }
+
+    // ===== 欠压 =====
+    if (v < UV_THRESHOLD) {
+      if (uv_cnt[i] < FAULT_COUNT_TH)
+        uv_cnt[i]++;
+
+      if (uv_cnt[i] >= FAULT_COUNT_TH)
+        fault[i].uv = 1;
+    } else {
+      if (uv_cnt[i] > 0)
+        uv_cnt[i]--;
+
+      if (uv_cnt[i] == 0)
+        fault[i].uv = 0;
+    }
   }
 }
 
-
-void check_open_wire(uint16_t *raw)
-{
-  for (int i = 0; i < 15; i++)
-  {
+void check_open_wire(uint16_t *raw) {
+  for (int i = 0; i < 15; i++) {
     if (raw[i] < 1000) // <0.1V
     {
-      fault[i].open = 1;
-    }
-    else
-    {
-      fault[i].open = 0;
+      if (open_cnt[i] < FAULT_COUNT_TH)
+        open_cnt[i]++;
+
+      if (open_cnt[i] >= FAULT_COUNT_TH)
+        fault[i].open = 1;
+    } else {
+      if (open_cnt[i] > 0)
+        open_cnt[i]--;
+
+      if (open_cnt[i] == 0)
+        fault[i].open = 0;
     }
   }
 }
 
-
-void check_spike(uint16_t *raw)
-{
-  for (int i = 0; i < 15; i++)
-  {
+void check_spike(uint16_t *raw) {
+  for (int i = 0; i < 15; i++) {
     float v = raw[i] * 0.0001f;
 
-    if (fabs(v - last_voltage[i]) > SPIKE_THRESHOLD)
-    {
-      fault[i].spike = 1;
-    }
-    else
-    {
-      fault[i].spike = 0;
+    if (fabs(v - last_voltage[i]) > SPIKE_THRESHOLD) {
+      if (spike_cnt[i] < FAULT_COUNT_TH)
+        spike_cnt[i]++;
+
+      if (spike_cnt[i] >= FAULT_COUNT_TH)
+        fault[i].spike = 1;
+    } else {
+      if (spike_cnt[i] > 0)
+        spike_cnt[i]--;
+
+      if (spike_cnt[i] == 0)
+        fault[i].spike = 0;
     }
 
     last_voltage[i] = v;
   }
 }
-
 
 uint8_t check_pec(uint8_t *data, uint16_t len)
 {
@@ -270,6 +307,20 @@ uint8_t check_pec(uint8_t *data, uint16_t len)
   uint16_t calc = pec15_calc(len - 2, data);
 
   return (received != calc);
+
+  if (pec_error) {
+    if (comm_cnt < COMM_FAULT_TH)
+      comm_cnt++;
+
+    if (comm_cnt >= COMM_FAULT_TH)
+      ams_fault.comm = 1;
+  } else {
+    if (comm_cnt > 0)
+      comm_cnt--;
+
+    if (comm_cnt == 0)
+      ams_fault.comm = 0;
+  }
 }
 
 
@@ -365,7 +416,7 @@ int main(void)
     snprintf(buffer, sizeof(buffer), "----------------------\r\n");
     uart_dma_transmit(buffer);
 
-    HAL_Delay(100);
+    HAL_Delay(1000);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
