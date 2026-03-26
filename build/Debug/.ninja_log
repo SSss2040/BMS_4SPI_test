@@ -52,3 +52,5 @@
 760	1674	7962398511397551	cmake/stm32cubemx/CMakeFiles/STM32_Drivers.dir/__/__/Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_flash.c.obj	2e2785d1703a454f
 809	1693	7962398511887861	cmake/stm32cubemx/CMakeFiles/STM32_Drivers.dir/__/__/Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_flash_ex.c.obj	9df55e38189164bf
 895	1790	7962398512752150	cmake/stm32cubemx/CMakeFiles/STM32_Drivers.dir/__/__/Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_uart.c.obj	7482b8445681b812
+6	536	7962403414141567	CMakeFiles/BMS_4SPI_test.dir/Core/Src/main.c.obj	d41674b98dce0ec4
+537	1048	7962403419452112	BMS_4SPI_test.elf	a4b51d89dab78661

@@ -29,6 +29,7 @@
 #include <stdint.h>
 #include <stdio.h>
 #include <string.h>
+#include <math.h>
 
 /* USER CODE END Includes */
 
@@ -283,7 +284,7 @@ void check_spike(uint16_t *raw) {
   for (int i = 0; i < 15; i++) {
     float v = raw[i] * 0.0001f;
 
-    if (fabs(v - last_voltage[i]) > SPIKE_THRESHOLD) {
+    if (fabsf(v - last_voltage[i]) > SPIKE_THRESHOLD) {
       if (spike_cnt[i] < FAULT_COUNT_TH)
         spike_cnt[i]++;
 
@@ -307,20 +308,6 @@ uint8_t check_pec(uint8_t *data, uint16_t len)
   uint16_t calc = pec15_calc(len - 2, data);
 
   return (received != calc);
-
-  if (pec_error) {
-    if (comm_cnt < COMM_FAULT_TH)
-      comm_cnt++;
-
-    if (comm_cnt >= COMM_FAULT_TH)
-      ams_fault.comm = 1;
-  } else {
-    if (comm_cnt > 0)
-      comm_cnt--;
-
-    if (comm_cnt == 0)
-      ams_fault.comm = 0;
-  }
 }
 
 
