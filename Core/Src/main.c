@@ -55,9 +55,9 @@ typedef struct
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define TOTAL_IC 3
+#define TOTAL_IC 1
 #define CELL_PER_IC 5
-#define TOTAL_CELL 15
+#define TOTAL_CELL 5
 #define CS_LOW() HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_RESET)
 #define CS_HIGH() HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_SET)
 #define OV_THRESHOLD 4.20f
@@ -77,20 +77,41 @@ typedef struct
 
 /* USER CODE BEGIN PV */
 uint16_t cell_raw[TOTAL_CELL]; // 存储所有电池的电压
-CellFault_t fault[15];
+CellFault_t fault[TOTAL_CELL];
 AMS_Fault_t ams_fault;
-float last_voltage[15] = {0};
-uint8_t ov_cnt[15] = {0};
-uint8_t uv_cnt[15] = {0};
-uint8_t open_cnt[15] = {0};
-uint8_t spike_cnt[15] = {0};
+float last_voltage[TOTAL_CELL] = {0};
+uint8_t ov_cnt[TOTAL_CELL] = {0};
+uint8_t uv_cnt[TOTAL_CELL] = {0};
+uint8_t open_cnt[TOTAL_CELL] = {0};
+uint8_t spike_cnt[TOTAL_CELL] = {0};
 uint8_t comm_cnt = 0;
+uint8_t uart_dma_busy = 0;
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
-void LTC6811_Init(void) {
+void LTC6811_Init(void);
+void LTC6811_write_config(uint8_t *config);
+int LTC6811_read_15cells(uint16_t *cell);
+uint16_t pec15_calc(uint8_t len, uint8_t *data);
+void spi_txrx(uint8_t *tx, uint8_t *rx, uint16_t len);
+void LTC6811_wakeup(void);
+void LTC6811_cmd(uint8_t cmd0, uint8_t cmd1);
+void LTC6811_read_reg(uint8_t cmd0, uint8_t cmd1, uint8_t *rx);
+void uart_dma_transmit(const char *message);
+void check_voltage_fault(uint16_t *raw);
+void check_open_wire(uint16_t *raw);
+void check_spike(uint16_t *raw);
+uint8_t check_pec(uint8_t *data, uint16_t len);
+void BMS_FaultDetect(uint16_t *cell_raw);
+float raw_to_voltage(uint16_t raw);
+    /* USER CODE END PFP */
+
+    /* Private user code
+       ---------------------------------------------------------*/
+    /* USER CODE BEGIN 0 */
+    void LTC6811_Init(void) {
   // 1. 唤醒芯片
   LTC6811_wakeup();
   HAL_Delay(10);
@@ -139,27 +160,31 @@ void LTC6811_write_config(uint8_t *config) {
   spi_txrx(tx, rx, sizeof(tx));
 }
 
-void LTC6811_read_15cells(uint16_t *cell)
-{
-  uint8_t rxA[TOTAL_IC * 8]; // C1~C3
-  uint8_t rxB[TOTAL_IC * 8]; // C4~C6
+int LTC6811_read_15cells(uint16_t *cell) {
+  uint8_t rxA[TOTAL_IC * 8];
+  uint8_t rxB[TOTAL_IC * 8];
 
-  // 1. 唤醒
+  // 唤醒
   LTC6811_wakeup();
+  HAL_Delay(1);
 
-  // 2. 启动ADC转换
+  // 启动ADC转换
   LTC6811_cmd(0x03, 0x60);
-  HAL_Delay(3);
+  HAL_Delay(5); // 增加延时确保转换完成
 
-  // 3. 只读A/B
+  // 读取A/B组数据
   LTC6811_read_reg(0x00, 0x04, rxA); // RDCVA
   LTC6811_read_reg(0x00, 0x06, rxB); // RDCVB
 
-  int idx = 0;
+  // 检查PEC错误
+  for (int ic = 0; ic < TOTAL_IC; ic++) {
+    if (check_pec(&rxA[ic * 8], 8) || check_pec(&rxB[ic * 8], 8)) {
+      return -1; // PEC错误
+    }
+  }
 
-  // ⚠️ 注意：链式顺序（远端IC先返回）
-  for (int ic = TOTAL_IC - 1; ic >= 0; ic--)
-  {
+  int idx = 0;
+  for (int ic = TOTAL_IC - 1; ic >= 0; ic--) {
     uint8_t *a = &rxA[ic * 8];
     uint8_t *b = &rxB[ic * 8];
 
@@ -175,26 +200,23 @@ void LTC6811_read_15cells(uint16_t *cell)
     v[4] = (b[3] << 8) | b[2];
     v[5] = (b[5] << 8) | b[4];
 
-    // 👉 只取前5节
-    for (int i = 0; i < 5; i++)
-    {
+    // 只取前5节
+    for (int i = 0; i < 5; i++) {
       if (idx < TOTAL_CELL)
         cell[idx++] = v[i];
     }
   }
+
+  return 0; // 成功
 }
 
-
-uint16_t pec15_calc(uint8_t len, uint8_t *data)
-{
+uint16_t pec15_calc(uint8_t len, uint8_t *data) {
   uint16_t remainder = 16;
   uint16_t polynomial = 0x4599;
 
-  for (uint8_t i = 0; i < len; i++)
-  {
+  for (uint8_t i = 0; i < len; i++) {
     remainder ^= (data[i] << 7);
-    for (uint8_t bit = 0; bit < 8; bit++)
-    {
+    for (uint8_t bit = 0; bit < 8; bit++) {
       if (remainder & 0x4000)
         remainder = (remainder << 1) ^ polynomial;
       else
@@ -204,27 +226,23 @@ uint16_t pec15_calc(uint8_t len, uint8_t *data)
   return remainder << 1;
 }
 
-
-void spi_txrx(uint8_t *tx, uint8_t *rx, uint16_t len)
-{
+void spi_txrx(uint8_t *tx, uint8_t *rx, uint16_t len) {
   CS_LOW();
-  for (volatile int i = 0; i < 10; i++);
+  for (volatile int i = 0; i < 10; i++)
+    ;
   HAL_SPI_TransmitReceive(&hspi1, tx, rx, len, 100);
   CS_HIGH();
-  for (volatile int i = 0; i < 10; i++);
+  for (volatile int i = 0; i < 10; i++)
+    ;
 }
 
-
-void LTC6811_wakeup(void)
-{
+void LTC6811_wakeup(void) {
   CS_LOW();
   HAL_Delay(1);
   CS_HIGH();
 }
 
-
-void LTC6811_cmd(uint8_t cmd0, uint8_t cmd1)
-{
+void LTC6811_cmd(uint8_t cmd0, uint8_t cmd1) {
   uint8_t buf[4];
 
   buf[0] = cmd0;
@@ -239,9 +257,7 @@ void LTC6811_cmd(uint8_t cmd0, uint8_t cmd1)
   CS_HIGH();
 }
 
-
-void LTC6811_read_reg(uint8_t cmd0, uint8_t cmd1, uint8_t *rx)
-{
+void LTC6811_read_reg(uint8_t cmd0, uint8_t cmd1, uint8_t *rx) {
   uint8_t tx[4 + TOTAL_IC * 8];
   uint8_t rx_buf[4 + TOTAL_IC * 8];
 
@@ -264,46 +280,43 @@ void LTC6811_read_reg(uint8_t cmd0, uint8_t cmd1, uint8_t *rx)
     rx[i] = rx_buf[i + 4];
 }
 
-
-void uart_dma_transmit(const char *message)
-{
-  HAL_UART_Transmit_DMA(&huart1, (uint8_t *)message, strlen(message));
-  while (HAL_UART_GetState(&huart1) != HAL_UART_STATE_READY)
-  {
-    // 等待DMA完成
+void uart_dma_transmit(const char *message) {
+  // 等待上一次传输完成
+  uint32_t timeout = 1000; // 1秒超时
+  while (uart_dma_busy && timeout--) {
+    HAL_Delay(1);
   }
+
+  uart_dma_busy = 1;
+  HAL_UART_Transmit_DMA(&huart1, (uint8_t *)message, strlen(message));
 }
 
 void check_voltage_fault(uint16_t *raw) {
-  for (int i = 0; i < 15; i++) {
-    float v = raw[i] * 0.0001f;
+  for (int i = 0; i < TOTAL_CELL; i++) {
+    float v = raw_to_voltage(raw[i]);
 
-    // ===== 过压 =====
+    // 过压检测
     if (v > OV_THRESHOLD) {
       if (ov_cnt[i] < FAULT_COUNT_TH)
         ov_cnt[i]++;
-
       if (ov_cnt[i] >= FAULT_COUNT_TH)
         fault[i].ov = 1;
     } else {
       if (ov_cnt[i] > 0)
         ov_cnt[i]--;
-
       if (ov_cnt[i] == 0)
         fault[i].ov = 0;
     }
 
-    // ===== 欠压 =====
+    // 欠压检测
     if (v < UV_THRESHOLD) {
       if (uv_cnt[i] < FAULT_COUNT_TH)
         uv_cnt[i]++;
-
       if (uv_cnt[i] >= FAULT_COUNT_TH)
         fault[i].uv = 1;
     } else {
       if (uv_cnt[i] > 0)
         uv_cnt[i]--;
-
       if (uv_cnt[i] == 0)
         fault[i].uv = 0;
     }
@@ -351,27 +364,22 @@ void check_spike(uint16_t *raw) {
   }
 }
 
-uint8_t check_pec(uint8_t *data, uint16_t len)
-{
+uint8_t check_pec(uint8_t *data, uint16_t len) {
   uint16_t received = (data[len - 2] << 8) | data[len - 1];
   uint16_t calc = pec15_calc(len - 2, data);
 
   return (received != calc);
 }
 
-
-void BMS_FaultDetect(uint16_t *cell_raw)
-{
+void BMS_FaultDetect(uint16_t *cell_raw) {
   check_voltage_fault(cell_raw);
   check_open_wire(cell_raw);
   check_spike(cell_raw);
 }
 
-/* USER CODE END PFP */
-
-/* Private user code ---------------------------------------------------------*/
-/* USER CODE BEGIN 0 */
-
+float raw_to_voltage(uint16_t raw) {
+  return raw * 0.0001f; // LTC6811的转换因子
+}
 /* USER CODE END 0 */
 
 /**
@@ -408,6 +416,20 @@ int main(void)
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
 
+  // 初始化LTC6811
+  LTC6811_Init();
+
+  // 初始化变量
+  memset(cell_raw, 0, sizeof(cell_raw));
+  memset(fault, 0, sizeof(fault));
+  memset(last_voltage, 0, sizeof(last_voltage));
+  memset(ov_cnt, 0, sizeof(ov_cnt));
+  memset(uv_cnt, 0, sizeof(uv_cnt));
+  memset(open_cnt, 0, sizeof(open_cnt));
+  memset(spike_cnt, 0, sizeof(spike_cnt));
+  comm_cnt = 0;
+
+  printf("BMS System Started\r\n");
   /* USER CODE END 2 */
 
   /* Infinite loop */
@@ -415,44 +437,61 @@ int main(void)
   while (1)
   {
     // 读取15节电池
-    LTC6811_read_15cells(cell_raw);
-    
-    // 故障检测
-    BMS_FaultDetect(cell_raw);
-
-    for (int i = 0; i < 15; i++)
+    if (LTC6811_read_15cells(cell_raw) == 0) // 假设函数返回0表示成功
     {
-      if (fault[i].ov)
-      {
-        
-        printf("Cell %d OV!\r\n", i + 1);
+      // 故障检测
+      BMS_FaultDetect(cell_raw);
+
+      // 打印故障信息
+      for (int i = 0; i < 15; i++) {
+        if (fault[i].ov) {
+          char buffer[64];
+          snprintf(buffer, sizeof(buffer), "Cell %d OV!\r\n", i + 1);
+          uart_dma_transmit(buffer);
+        }
+        if (fault[i].uv) {
+          char buffer[64];
+          snprintf(buffer, sizeof(buffer), "Cell %d UV!\r\n", i + 1);
+          uart_dma_transmit(buffer);
+        }
+        if (fault[i].open) {
+          char buffer[64];
+          snprintf(buffer, sizeof(buffer), "Cell %d OPEN!\r\n", i + 1);
+          uart_dma_transmit(buffer);
+        }
+        if (fault[i].spike) {
+          char buffer[64];
+          snprintf(buffer, sizeof(buffer), "Cell %d SPIKE!\r\n", i + 1);
+          uart_dma_transmit(buffer);
+        }
       }
-      if (fault[i].uv)
-        printf("Cell %d UV!\r\n", i + 1);
 
-      if (fault[i].open)
-        printf("Cell %d OPEN!\r\n", i + 1);
-
-      if (fault[i].spike)
-        printf("Cell %d SPIKE!\r\n", i + 1);
-    }
-
-    // 打印电压
-    char buffer[128];
-    snprintf(buffer, sizeof(buffer), "Cell Voltages:\r\n");
-    uart_dma_transmit(buffer);
-
-    for (int i = 0; i < TOTAL_CELL; i++)
-    {
-      float voltage = cell_raw[i] * 0.0001f;
-      snprintf(buffer, sizeof(buffer), "Cell %02d: %.4f V\r\n", i + 1, voltage);
+      // 打印电压
+      char buffer[128];
+      snprintf(buffer, sizeof(buffer), "Cell Voltages:\r\n");
       uart_dma_transmit(buffer);
+
+      for (int i = 0; i < TOTAL_CELL; i++) {
+        float voltage = cell_raw[i] * 0.0001f;
+        snprintf(buffer, sizeof(buffer), "Cell %02d: %.4f V\r\n", i + 1, voltage);
+        uart_dma_transmit(buffer);
+      }
+
+      snprintf(buffer, sizeof(buffer), "----------------------\r\n");
+      uart_dma_transmit(buffer);
+    } else {
+      char buffer[64];
+      snprintf(buffer, sizeof(buffer), "LTC6811 Read Error!\r\n");
+      uart_dma_transmit(buffer);
+      comm_cnt++;
+      if (comm_cnt >= COMM_FAULT_TH) {
+        ams_fault.comm = 1;
+        snprintf(buffer, sizeof(buffer), "Communication Fault!\r\n");
+        uart_dma_transmit(buffer);
+      }
     }
 
-    snprintf(buffer, sizeof(buffer), "----------------------\r\n");
-    uart_dma_transmit(buffer);
-
-    HAL_Delay(1000);
+    HAL_Delay(1000); // 1秒读取一次
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
