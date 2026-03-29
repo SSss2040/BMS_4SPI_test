@@ -103,7 +103,7 @@ void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
 void LTC6811_Init(void);
 void LTC6811_write_config(uint8_t *config);
-int LTC6811_read_15cells(uint16_t *cell);
+int LTC6811_read_cells(uint16_t *cell);
 uint16_t pec15_calc(uint8_t *data, int len);
 void spi_txrx(uint8_t *tx, uint8_t *rx, uint16_t len);
 void LTC6811_wakeup(void);
@@ -172,7 +172,7 @@ void LTC6811_write_config(uint8_t *config) {
   tx[1] = CMD_WRCFGA & 0xFF;
 
   // 计算命令PEC - 修正参数顺序
-  uint16_t pec = pec15_calc(tx, 2); // 修正这里
+  uint16_t pec = pec15_calc(tx, 2);
   tx[2] = pec >> 8;
   tx[3] = pec & 0xFF;
 
@@ -180,7 +180,7 @@ void LTC6811_write_config(uint8_t *config) {
   memcpy(&tx[4], config, 6);
 
   // 计算数据PEC - 修正参数顺序
-  pec = pec15_calc(config, 6); // 修正这里
+  pec = pec15_calc(config, 6);
   tx[10] = pec >> 8;
   tx[11] = pec & 0xFF;
 
@@ -203,7 +203,7 @@ void LTC6811_clear_status(void) {
   spi_txrx(tx, rx, sizeof(tx));
 }
 
-int LTC6811_read_15cells(uint16_t *cell) {
+int LTC6811_read_cells(uint16_t *cell) {
   uint8_t rx_buf[TOTAL_IC * 8 + 4]; // 数据 + PEC
 
   // 1. 唤醒芯片
@@ -227,31 +227,17 @@ int LTC6811_read_15cells(uint16_t *cell) {
   // 发送命令并接收数据
   CS_LOW();
   HAL_SPI_Transmit(&hspi1, tx, 4, 100);
-
-  // 接收所有芯片的数据（每个芯片12节电池，每节2字节）
-  for (int i = 0; i < TOTAL_IC; i++) {
-    HAL_SPI_Receive(&hspi1, &rx_buf[i * 8], 8, 100);
-  }
+  HAL_SPI_Receive(&hspi1, rx_buf, 8, 100); // 读取8字节数据
   CS_HIGH();
 
   // 4. 检查PEC错误
-  for (int ic = 0; ic < TOTAL_IC; ic++) {
-    if (check_pec(&rx_buf[ic * 8], 8)) {
-      return -1; // PEC错误
-    }
+  if (check_pec(rx_buf, 8)) {
+    return -1; // PEC错误
   }
 
   // 5. 解析数据（每个芯片返回12节电池电压，我们只取前5节）
-  int idx = 0;
-  for (int ic = TOTAL_IC - 1; ic >= 0; ic--) {
-    uint8_t *data = &rx_buf[ic * 8];
-
-    // 解析6组电压（每组2字节，共12节电池）
-    for (int i = 0; i < 6; i++) {
-      if (idx < TOTAL_CELL) {
-        cell[idx++] = (data[i * 2 + 1] << 8) | data[i * 2];
-      }
-    }
+  for (int i = 0; i < TOTAL_CELL; i++) {
+    cell[i] = (rx_buf[i * 2 + 1] << 8) | rx_buf[i * 2];
   }
 
   return 0; // 成功
@@ -543,9 +529,10 @@ int main(void)
   while (1)
   {
     // 读取15节电池
-    if (LTC6811_read_15cells(cell_raw) == 0) // 假设函数返回0表示成功
+    if (LTC6811_read_cells(cell_raw) == 0)
     {
       // 故障检测
+      /*
       BMS_FaultDetect(cell_raw);
 
       // 打印故障信息
@@ -570,7 +557,7 @@ int main(void)
           snprintf(buffer, sizeof(buffer), "Cell %d SPIKE!\r\n", i + 1);
           uart_dma_transmit(buffer);
         }
-      }
+      }*/
 
       // 打印电压
       char buffer[128];
@@ -578,7 +565,7 @@ int main(void)
       uart_dma_transmit(buffer);
 
       for (int i = 0; i < TOTAL_CELL; i++) {
-        float voltage = cell_raw[i] * 0.0001f;
+        float voltage = cell_raw[i] * 0.001f;
         snprintf(buffer, sizeof(buffer), "Cell %02d: %.4f V\r\n", i + 1, voltage);
         uart_dma_transmit(buffer);
       }
