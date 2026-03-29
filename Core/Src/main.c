@@ -68,21 +68,23 @@ typedef struct
 #define RECOVER_COUNT_TH 3 // 连续3次恢复
 #define COMM_FAULT_TH 3
 
-#define CMD_WRCFGA 0x0001  // 写入配置寄存器组A
-#define CMD_RDCFGA 0x0002  // 读取配置寄存器组A
-#define CMD_RDCV 0x0003    // 读取所有12节电池的电压测量值
-#define CMD_RDSTATA 0x0008 // 读取状态寄存器组A
-#define CMD_RDSTATB 0x0009 // 读取状态寄存器组B
-#define CMD_CLRSTAT 0x000A // 清除所有状态寄存器故障标志位
-#define CMD_ADCV 0x0260    // 启动所有电池单体电压测量
+#define CMD_WRCFGA 0x001  // 写入配置寄存器组A
+#define CMD_RDCFGA 0x002  // 读取配置寄存器组A
+#define CMD_RDCV 0x0003
+#define CMD_RDCVA 0x0004
+#define CMD_RDCVB 0x0006 // 读取所有12节电池的电压测量值
+#define CMD_RDSTATA 0x010 // 读取状态寄存器组A
+#define CMD_RDSTATB 0x012 // 读取状态寄存器组B
+#define CMD_CLRSTAT 0x713 // 清除所有状态寄存器故障标志位
+#define CMD_ADCV 0x04c0    // 启动所有电池单体电压测量
 /* USER CODE END PD */
 
-/* Private macro -------------------------------------------------------------*/
+/* Private macro-------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 
 /* USER CODE END PM */
 
-/* Private variables ---------------------------------------------------------*/
+/* Private variables---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
 uint16_t cell_raw[TOTAL_CELL]; // 存储所有电池的电压
@@ -204,43 +206,48 @@ void LTC6811_clear_status(void) {
 }
 
 int LTC6811_read_cells(uint16_t *cell) {
-  uint8_t rx_buf[TOTAL_IC * 8 + 4]; // 数据 + PEC
+  uint8_t cmd[4];    // 命令 + PEC
+  uint8_t rx_buf[8]; // 6字节数据 + 2字节PEC（单IC单组）
+  const uint16_t rdcv_cmds[2] = {CMD_RDCVA, CMD_RDCVB};
 
-  // 1. 唤醒芯片
+  // 1. 唤醒
   LTC6811_wakeup();
   HAL_Delay(1);
 
-  // 2. 启动ADC转换（根据规格书使用0x0260）
-  LTC6811_cmd(0x02, 0x60);
-  HAL_Delay(5); // 等待转换完成
+  // 2. 启动全部Cell ADC转换
+  LTC6811_cmd(CMD_ADCV >> 8, CMD_ADCV & 0xFF);
+  HAL_Delay(5); // 等待转换完成（取决于滤波模式）
 
-  // 3. 读取所有电池电压（RDCV命令）
-  uint8_t tx[4];
-  tx[0] = CMD_RDCV >> 8;
-  tx[1] = CMD_RDCV & 0xFF;
+  // 3. 循环读取4个寄存器组，共12节电池
+  for (int grp = 0; grp < 2; grp++) {
+    // 构造命令帧
+    cmd[0] = rdcv_cmds[grp] >> 8;
+    cmd[1] = rdcv_cmds[grp] & 0xFF;
+    uint16_t pec = pec15_calc(cmd, 2);
+    cmd[2] = pec >> 8;
+    cmd[3] = pec & 0xFF;
 
-  // 计算命令PEC
-  uint16_t pec = pec15_calc(tx, 2);
-  tx[2] = pec >> 8;
-  tx[3] = pec & 0xFF;
+    // SPI 传输
+    CS_LOW();
+    HAL_SPI_Transmit(&hspi1, cmd, 4, 100);
+    HAL_SPI_Receive(&hspi1, rx_buf, 8, 100);
+    CS_HIGH();
 
-  // 发送命令并接收数据
-  CS_LOW();
-  HAL_SPI_Transmit(&hspi1, tx, 4, 100);
-  HAL_SPI_Receive(&hspi1, rx_buf, 8, 100); // 读取8字节数据
-  CS_HIGH();
+    // PEC 校验（对前6字节数据计算PEC，与后2字节比较）
+    uint16_t calc_pec = pec15_calc(rx_buf, 6);
+    uint16_t recv_pec = (rx_buf[6] << 8) | rx_buf[7];
+    if (calc_pec != recv_pec) {
+      return -1; // PEC错误
+    }
 
-  // 4. 检查PEC错误
-  if (check_pec(rx_buf, 8)) {
-    return -1; // PEC错误
+    // 解析3节电池电压（每节2字节，12位有效数据）
+    for (int i = 0; i < 3; i++) {
+      cell[grp * 3 + i] = (rx_buf[i * 2 + 1] << 8) | rx_buf[i * 2];
+      // 电压值 = cell[x] * 0.0001 V (100μV/LSB)
+    }
   }
 
-  // 5. 解析数据（每个芯片返回12节电池电压，我们只取前5节）
-  for (int i = 0; i < TOTAL_CELL; i++) {
-    cell[i] = (rx_buf[i * 2 + 1] << 8) | rx_buf[i * 2];
-  }
-
-  return 0; // 成功
+  return 0;
 }
 
 uint16_t pec15_calc(uint8_t *data, int len) {
