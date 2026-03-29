@@ -90,7 +90,54 @@ uint8_t comm_cnt = 0;
 /* Private function prototypes -----------------------------------------------*/
 void SystemClock_Config(void);
 /* USER CODE BEGIN PFP */
+void LTC6811_Init(void) {
+  // 1. 唤醒芯片
+  LTC6811_wakeup();
+  HAL_Delay(10);
 
+  // 2. 配置CFGR0-CFGR5寄存器（根据实际需求配置）
+  // 这里可以配置GPIO、ADC模式等
+  uint8_t config[6] = {0};
+
+  // 示例配置：启用所有GPIO，ADC模式为7kHz
+  config[0] = 0x00; // GPIO设置
+  config[1] = 0x00;
+  config[2] = 0x00;
+  config[3] = 0x00;
+  config[4] = 0x00;
+  config[5] = 0x00;
+
+  // 写入配置寄存器
+  LTC6811_write_config(config);
+
+  // 3. 启动ADC转换
+  LTC6811_cmd(0x03, 0x60); // 启动所有电池ADC转换
+  HAL_Delay(10);
+}
+
+void LTC6811_write_config(uint8_t *config) {
+  uint8_t tx[4 + 6 + 2]; // 命令 + 数据 + PEC
+  uint8_t rx[4 + 6 + 2];
+
+  // 写配置命令 (WRCFG)
+  tx[0] = 0x00;
+  tx[1] = 0x01;
+
+  // 计算命令PEC
+  uint16_t pec = pec15_calc(2, tx);
+  tx[2] = pec >> 8;
+  tx[3] = pec & 0xFF;
+
+  // 复制配置数据
+  memcpy(&tx[4], config, 6);
+
+  // 计算数据PEC
+  pec = pec15_calc(6, config);
+  tx[10] = pec >> 8;
+  tx[11] = pec & 0xFF;
+
+  spi_txrx(tx, rx, sizeof(tx));
+}
 
 void LTC6811_read_15cells(uint16_t *cell)
 {
@@ -161,8 +208,10 @@ uint16_t pec15_calc(uint8_t len, uint8_t *data)
 void spi_txrx(uint8_t *tx, uint8_t *rx, uint16_t len)
 {
   CS_LOW();
+  for (volatile int i = 0; i < 10; i++);
   HAL_SPI_TransmitReceive(&hspi1, tx, rx, len, 100);
   CS_HIGH();
+  for (volatile int i = 0; i < 10; i++);
 }
 
 
