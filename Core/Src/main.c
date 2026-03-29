@@ -20,7 +20,6 @@
 #include "main.h"
 #include "dma.h"
 #include "spi.h"
-#include "stm32f1xx_hal.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -79,12 +78,12 @@ typedef struct
 #define CMD_ADCV 0x04c0    // 启动所有电池单体电压测量
 /* USER CODE END PD */
 
-/* Private macro-------------------------------------------------------------*/
+/* Private macro -------------------------------------------------------------*/
 /* USER CODE BEGIN PM */
 
 /* USER CODE END PM */
 
-/* Private variables---------------------------------------------------------*/
+/* Private variables ---------------------------------------------------------*/
 
 /* USER CODE BEGIN PV */
 uint16_t cell_raw[TOTAL_CELL]; // 存储所有电池的电压
@@ -124,7 +123,7 @@ void LTC6811_read_status(void);
 
 /* USER CODE END PFP */
 
-/* Private user code           ---------------------------------------------------------*/
+/* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 void LTC6811_Init(void) {
   // 1. 唤醒芯片
