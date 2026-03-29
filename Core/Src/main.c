@@ -274,7 +274,7 @@ void spi_txrx(uint8_t *tx, uint8_t *rx, uint16_t len) {
 
 void LTC6811_wakeup(void) {
   CS_LOW();
-  HAL_Delay(1);
+  HAL_Delay(2);
   CS_HIGH();
   HAL_Delay(1);
 }
@@ -576,6 +576,7 @@ int main(void)
       char buffer[64];
       snprintf(buffer, sizeof(buffer), "LTC6811 Read Error!\r\n");
       uart_dma_transmit(buffer);
+      HAL_Delay(10);
       comm_cnt++;
       if (comm_cnt >= COMM_FAULT_TH) {
         ams_fault.comm = 1;
@@ -584,7 +585,7 @@ int main(void)
       }
     }
 
-    HAL_Delay(1000); // 1秒读取一次
+    HAL_Delay(100); // 1秒读取一次
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
