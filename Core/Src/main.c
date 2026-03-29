@@ -20,6 +20,7 @@
 #include "main.h"
 #include "dma.h"
 #include "spi.h"
+#include "stm32f1xx_hal.h"
 #include "usart.h"
 #include "gpio.h"
 
@@ -69,7 +70,6 @@ typedef struct
 
 #define CMD_WRCFGA 0x001  // 写入配置寄存器组A
 #define CMD_RDCFGA 0x002  // 读取配置寄存器组A
-#define CMD_RDCV 0x0003
 #define CMD_RDCVA 0x0004
 #define CMD_RDCVB 0x0006 // 读取所有12节电池的电压测量值
 #define CMD_RDSTATA 0x010 // 读取状态寄存器组A
@@ -120,7 +120,7 @@ float raw_to_voltage(uint16_t raw);
 static uint16_t pec15Table[256];
 void LTC6811_clear_status(void);
 void LTC6811_read_status(void);
-
+void LTC6811_start_conversion(void);
 /* USER CODE END PFP */
 
 /* Private user code ---------------------------------------------------------*/
@@ -204,25 +204,30 @@ void LTC6811_clear_status(void) {
   spi_txrx(tx, rx, sizeof(tx));
 }
 
+void LTC6811_start_conversion(void) {
+  LTC6811_wakeup();
+  LTC6811_cmd(CMD_ADCV >> 8, CMD_ADCV & 0xFF);
+}
+
 int LTC6811_read_cells(uint16_t *cell) {
   uint8_t cmd[4];    // 命令 + PEC
   uint8_t rx_buf[8]; // 6字节数据 + 2字节PEC（单IC单组）
   const uint16_t rdcv_cmds[2] = {CMD_RDCVA, CMD_RDCVB};
 
   // 1. 唤醒
-  LTC6811_wakeup();
-  HAL_Delay(1);
+  //LTC6811_wakeup();
+  //HAL_Delay(1);
 
   // 2. 启动全部Cell ADC转换
-  LTC6811_cmd(CMD_ADCV >> 8, CMD_ADCV & 0xFF);
-  HAL_Delay(5); // 等待转换完成（取决于滤波模式）
+ // LTC6811_cmd(CMD_ADCV >> 8, CMD_ADCV & 0xFF);
+  //HAL_Delay(5); // 等待转换完成（取决于滤波模式）
 
   // 3. 循环读取4个寄存器组，共12节电池
   for (int grp = 0; grp < 2; grp++) {
     // 构造命令帧
     cmd[0] = rdcv_cmds[grp] >> 8;
     cmd[1] = rdcv_cmds[grp] & 0xFF;
-    uint16_t pec = pec15_calc(cmd, 2);
+    uint16_t pec = pec15_calc(&cmd[0], 2);
     cmd[2] = pec >> 8;
     cmd[3] = pec & 0xFF;
 
@@ -282,7 +287,7 @@ void LTC6811_wakeup(void) {
   CS_LOW();
   HAL_Delay(2);
   CS_HIGH();
-  HAL_Delay(1);
+  HAL_Delay(5);
 }
 
 void LTC6811_cmd(uint8_t cmd0, uint8_t cmd1){
@@ -297,32 +302,10 @@ void LTC6811_cmd(uint8_t cmd0, uint8_t cmd1){
   buf[3] = pec & 0xFF;
 
   CS_LOW();
+  for (volatile int i = 0; i < 10; i++);
   HAL_SPI_Transmit(&hspi1, buf, 4, 100);
+  for (volatile int i = 0; i < 10; i++);
   CS_HIGH();
-}
-
-void LTC6811_read_reg(uint8_t cmd0, uint8_t cmd1, uint8_t *rx) {
-  uint8_t tx[4 + TOTAL_IC * 8];
-  uint8_t rx_buf[4 + TOTAL_IC * 8];
-
-  // 命令
-  tx[0] = cmd0;
-  tx[1] = cmd1;
-
-  // 修正：第一个参数应该是 tx 指针，不是长度
-  uint16_t pec = pec15_calc(tx, 2); // 修正这里
-  tx[2] = pec >> 8;
-  tx[3] = pec & 0xFF;
-
-  // 填充dummy
-  for (int i = 4; i < sizeof(tx); i++)
-    tx[i] = 0xFF;
-
-  spi_txrx(tx, rx_buf, sizeof(tx));
-
-  // 拷贝有效数据（去掉前4字节）
-  for (int i = 0; i < TOTAL_IC * 8; i++)
-    rx[i] = rx_buf[i + 4];
 }
 
 void LTC6811_read_status(void) {
@@ -457,7 +440,7 @@ void BMS_FaultDetect(uint16_t *cell_raw) {
 
 float raw_to_voltage(uint16_t raw) {
   // LTC6811电压测量分辨率：1mV/LSB
-  return raw * 0.001f;
+  return raw * 0.0001f;
 }
 
 // 初始化PEC15查找表，MCU上电时仅需调用一次
@@ -571,7 +554,7 @@ int main(void)
       uart_dma_transmit(buffer);
 
       for (int i = 0; i < TOTAL_CELL; i++) {
-        float voltage = cell_raw[i] * 0.001f;
+        float voltage = cell_raw[i] * 0.0001f;
         snprintf(buffer, sizeof(buffer), "Cell %02d: %.4f V\r\n", i + 1, voltage);
         uart_dma_transmit(buffer);
       }
