@@ -50,9 +50,9 @@ typedef struct
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define TOTAL_IC 1
+#define TOTAL_IC 3
 #define CELL_PER_IC 12
-#define TOTAL_CELL 12
+#define TOTAL_CELL (TOTAL_IC * CELL_PER_IC)
 #define CS_LOW() HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_RESET)
 #define CS_HIGH() HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_SET)
 #define OV_THRESHOLD 4.20f

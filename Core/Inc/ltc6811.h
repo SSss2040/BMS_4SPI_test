@@ -3,9 +3,9 @@
 
 #include <stdint.h>
 
-#define TOTAL_IC 1
+#define TOTAL_IC 3
 #define CELL_PER_IC 12
-#define TOTAL_CELL 12
+#define TOTAL_CELL (TOTAL_IC * CELL_PER_IC)
 #define CS_LOW() HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_RESET)
 #define CS_HIGH() HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_SET)
 #define OV_THRESHOLD 4.20f
@@ -27,7 +27,7 @@
 #define CMD_ADCV 0x04c0    // 启动所有电池单体电压测量
 
 void LTC6811_Init(void);
-void LTC6811_write_config(uint8_t *config);
+void LTC6811_write_config_all(uint8_t config[TOTAL_IC][6]);
 void LTC6811_clear_status(void);
 void LTC6811_start_conversion(void);
 int LTC6811_read_cells(uint16_t *cell);
@@ -36,5 +36,6 @@ void spi_txrx(uint8_t *tx, uint8_t *rx, uint16_t len);
 void LTC6811_wakeup(void);
 void LTC6811_cmd(uint8_t cmd0, uint8_t cmd1);
 void LTC6811_read_status(void);
+void LTC6811_send_cmd(uint16_t cmd);
 
 #endif // LTC6811_H

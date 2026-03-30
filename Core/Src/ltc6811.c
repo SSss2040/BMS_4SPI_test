@@ -7,82 +7,81 @@
 static uint16_t pec15Table[256];
 
 void LTC6811_Init(void) {
-  // 1. 唤醒芯片
+  // 1. 唤醒
   LTC6811_wakeup();
-  HAL_Delay(10);
+  HAL_Delay(5);
 
-  // 2. 配置CFGR0-CFGR5寄存器
-  uint8_t config[6] = {0};
+  // 2. 配置数组（3颗）
+  uint8_t config[TOTAL_IC][6];
 
-  // CFGR0: GPIO配置、基准源控制、ADC模式
-  config[0] = 0x00; // GPIO1-5输入，REFON=0，SWTRD=0，ADCOPT=0（标准模式）
+  for (int ic = 0; ic < TOTAL_IC; ic++) {
+    uint16_t vuv = 2500;
+    uint16_t vov = 4200;
 
-  // CFGR1: 欠压阈值低8位（示例：2.5V = 2500mV）
-  uint16_t vuv = 2500; // 欠压阈值2.5V
-  config[1] = vuv & 0xFF;
+    config[ic][0] = 0x00;
+    config[ic][1] = vuv & 0xFF;
+    config[ic][2] = ((vuv >> 8) & 0x0F) | ((vov & 0x0F) << 4);
+    config[ic][3] = (vov >> 4) & 0xFF;
+    config[ic][4] = 0x00;
+    config[ic][5] = 0x00;
+  }
 
-  // CFGR2: 欠压阈值高4位 + 过压阈值低4位
-  uint16_t vov = 4200; // 过压阈值4.2V
-  config[2] = ((vuv >> 8) & 0x0F) | ((vov & 0x0F) << 4);
+  // 3. 写配置（一次性写3颗）
+  LTC6811_write_config_all(config);
 
-  // CFGR3: 过压阈值高8位
-  config[3] = (vov >> 4) & 0xFF;
-
-  // CFGR4: 放电定时器 + DCC高4位
-  config[4] = 0x00; // 放电定时器0分钟，DCC高4位0
-
-  // CFGR5: DCC低8位（所有电池放电关闭）
-  config[5] = 0x00;
-
-  // 写入配置寄存器
-  LTC6811_write_config(config);
-
-  // 3. 清除状态寄存器
+  // 4. 清状态
   LTC6811_clear_status();
 
-  // 4. 启动ADC转换
-  LTC6811_cmd(CMD_ADCV >> 8, CMD_ADCV & 0xFF);
-  HAL_Delay(10);
+  // 5. 启动ADC（整链一起）
+  LTC6811_start_conversion();
+  HAL_Delay(3);
 }
 
-void LTC6811_write_config(uint8_t *config) {
-  uint8_t tx[4 + 6 + 2]; // 命令 + 数据 + PEC
-  uint8_t rx[4 + 6 + 2];
+void LTC6811_write_config_all(uint8_t config[TOTAL_IC][6]) {
+  uint8_t tx[4 + TOTAL_IC * 8];
+  uint8_t rx[sizeof(tx)];
 
-  // 写配置命令 (WRCFGA)
-  tx[0] = CMD_WRCFGA >> 8;
-  tx[1] = CMD_WRCFGA & 0xFF;
+  // 命令
+  tx[0] = 0x00;
+  tx[1] = 0x01;
 
-  // 计算命令PEC - 修正参数顺序
   uint16_t pec = pec15_calc(tx, 2);
   tx[2] = pec >> 8;
   tx[3] = pec & 0xFF;
 
-  // 复制配置数据
-  memcpy(&tx[4], config, 6);
+  // 每个IC配置
+  for (int ic = 0; ic < TOTAL_IC; ic++) {
+    int offset = 4 + ic * 8;
 
-  // 计算数据PEC - 修正参数顺序
-  pec = pec15_calc(config, 6);
-  tx[10] = pec >> 8;
-  tx[11] = pec & 0xFF;
+    memcpy(&tx[offset], config[ic], 6);
 
-  spi_txrx(tx, rx, sizeof(tx));
+    pec = pec15_calc(config[ic], 6);
+    tx[offset + 6] = pec >> 8;
+    tx[offset + 7] = pec & 0xFF;
+  }
+
+  CS_LOW();
+  HAL_SPI_TransmitReceive(&hspi1, tx, rx, sizeof(tx), 100);
+  CS_HIGH();
 }
 
 void LTC6811_clear_status(void) {
+  LTC6811_send_cmd(CMD_CLRSTAT);
+}
+
+void LTC6811_send_cmd(uint16_t cmd) {
   uint8_t tx[4];
-  uint8_t rx[4];
 
-  // 清除状态命令 (CLRSTAT)
-  tx[0] = CMD_CLRSTAT >> 8;
-  tx[1] = CMD_CLRSTAT & 0xFF;
+  tx[0] = cmd >> 8;
+  tx[1] = cmd & 0xFF;
 
-  // 计算PEC - 修正参数顺序
-  uint16_t pec = pec15_calc(tx, 2); // 修正这里
+  uint16_t pec = pec15_calc(tx, 2);
   tx[2] = pec >> 8;
   tx[3] = pec & 0xFF;
 
-  spi_txrx(tx, rx, sizeof(tx));
+  CS_LOW();
+  HAL_SPI_Transmit(&hspi1, tx, 4, 100);
+  CS_HIGH();
 }
 
 void LTC6811_start_conversion(void) {
@@ -91,20 +90,20 @@ void LTC6811_start_conversion(void) {
 }
 
 int LTC6811_read_cells(uint16_t *cell) {
-  uint8_t tx[12];
-  uint8_t rx[12];
+  uint8_t tx[4 + 8 * TOTAL_IC];
+  uint8_t rx[4 + 8 * TOTAL_IC];
 
   const uint16_t cmds[4] = {
-      CMD_RDCVA, // A
-      CMD_RDCVB, // B
-      CMD_RDCVC, // C
-      CMD_RDCVD  // D
+      0x0004, // RDCVA
+      0x0006, // RDCVB
+      0x0008, // RDCVC
+      0x000A  // RDCVD
   };
 
   for (int grp = 0; grp < 4; grp++) {
     memset(tx, 0, sizeof(tx));
 
-    // 命令
+    // 1. 命令
     tx[0] = cmds[grp] >> 8;
     tx[1] = cmds[grp] & 0xFF;
 
@@ -112,22 +111,33 @@ int LTC6811_read_cells(uint16_t *cell) {
     tx[2] = pec >> 8;
     tx[3] = pec & 0xFF;
 
-    // 一次性通信
+    // 2. 后面全部是dummy（自动0）
+
+    // 3. SPI通信
     CS_LOW();
-    HAL_SPI_TransmitReceive(&hspi1, tx, rx, 12, 100);
+    HAL_SPI_TransmitReceive(&hspi1, tx, rx, sizeof(tx), 100);
     CS_HIGH();
 
-    uint8_t *data = &rx[4]; //接收从第5字节开始是数据
+    // 4. 解析每个IC
+    for (int ic = 0; ic < TOTAL_IC; ic++) {
+      // ⚠️ 注意顺序：远端IC在前
+      int rx_offset = 4 + ic * 8;
 
-    // PEC校验
-    uint16_t calc = pec15_calc(data, 6);
-    uint16_t recv = (data[6] << 8) | data[7];
-    if (calc != recv)
-      return -1;
+      uint8_t *data = &rx[rx_offset];
 
-    // 解析
-    for (int i = 0; i < 3; i++) {
-      cell[grp * 3 + i] = (data[2 * i + 1] << 8) | data[2 * i];
+      // PEC校验
+      uint16_t calc = pec15_calc(data, 6);
+      uint16_t recv = (data[6] << 8) | data[7];
+      if (calc != recv)
+        return -1;
+
+      // 存入cell数组
+      for (int i = 0; i < TOTAL_IC; i++) {
+        int cell_index = (TOTAL_IC - 1 - ic) * 12 + // IC顺序翻转
+                         grp * 3 + i;
+
+        cell[cell_index] = (data[2 * i + 1] << 8) | data[2 * i];
+      }
     }
   }
 
