@@ -30,3 +30,4 @@
 7	458	7964925668113053	CMakeFiles/BMS_4SPI_test.dir/Core/Src/main.c.obj	d41674b98dce0ec4
 459	785	7964925672637995	BMS_4SPI_test.elf	a4b51d89dab78661
 5	664	7965582291558490	CMakeFiles/BMS_4SPI_test.dir/Core/Src/main.c.obj	d41674b98dce0ec4
+5	294	7965590638732203	cmake/stm32cubemx/CMakeFiles/STM32_Drivers.dir/__/__/Drivers/STM32F1xx_HAL_Driver/Src/stm32f1xx_hal_spi.c.obj	57b4a5a001ca5a91

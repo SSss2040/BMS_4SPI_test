@@ -91,44 +91,43 @@ void LTC6811_start_conversion(void) {
 }
 
 int LTC6811_read_cells(uint16_t *cell) {
-  uint8_t cmd[4];    // 命令 + PEC
-  uint8_t rx_buf[8]; // 6字节数据 + 2字节PEC（单IC单组）
-  const uint16_t rdcv_cmds[4] = {CMD_RDCVA, CMD_RDCVB, CMD_RDCVC, CMD_RDCVD}; // 4组命令，分别读取12节电池的电压
+  uint8_t tx[12];
+  uint8_t rx[12];
 
-  // 1. 唤醒
-  //LTC6811_wakeup();
-  //HAL_Delay(1);
+  const uint16_t cmds[4] = {
+      CMD_RDCVA, // A
+      CMD_RDCVB, // B
+      CMD_RDCVC, // C
+      CMD_RDCVD  // D
+  };
 
-  // 2. 启动全部Cell ADC转换
- // LTC6811_cmd(CMD_ADCV >> 8, CMD_ADCV & 0xFF);
-  //HAL_Delay(5); // 等待转换完成（取决于滤波模式）
-
-  // 3. 循环读取4个寄存器组，共12节电池
   for (int grp = 0; grp < 4; grp++) {
-    // 构造命令帧
-    cmd[0] = rdcv_cmds[grp] >> 8;
-    cmd[1] = rdcv_cmds[grp] & 0xFF;
-    uint16_t pec = pec15_calc(&cmd[0], 2);
-    cmd[2] = pec >> 8;
-    cmd[3] = pec & 0xFF;
+    memset(tx, 0, sizeof(tx));
 
-    // SPI 传输
+    // 命令
+    tx[0] = cmds[grp] >> 8;
+    tx[1] = cmds[grp] & 0xFF;
+
+    uint16_t pec = pec15_calc(tx, 2);
+    tx[2] = pec >> 8;
+    tx[3] = pec & 0xFF;
+
+    // 一次性通信
     CS_LOW();
-    HAL_SPI_Transmit(&hspi1, cmd, 4, 100);
-    HAL_SPI_Receive(&hspi1, rx_buf, 8, 100);
+    HAL_SPI_TransmitReceive(&hspi1, tx, rx, 12, 100);
     CS_HIGH();
 
-    // PEC 校验（对前6字节数据计算PEC，与后2字节比较）
-    uint16_t calc_pec = pec15_calc(rx_buf, 6);
-    uint16_t recv_pec = (rx_buf[6] << 8) | rx_buf[7];
-    if (calc_pec != recv_pec) {
-      return -1; // PEC错误
-    }
+    uint8_t *data = &rx[4]; //接收从第5字节开始是数据
 
-    // 解析3节电池电压（每节2字节，12位有效数据）
+    // PEC校验
+    uint16_t calc = pec15_calc(data, 6);
+    uint16_t recv = (data[6] << 8) | data[7];
+    if (calc != recv)
+      return -1;
+
+    // 解析
     for (int i = 0; i < 3; i++) {
-      cell[grp * 3 + i] = (rx_buf[i * 2 + 1] << 8) | rx_buf[i * 2];
-      // 电压值 = cell[x] * 0.0001 V (100μV/LSB)
+      cell[grp * 3 + i] = (data[2 * i + 1] << 8) | data[2 * i];
     }
   }
 
