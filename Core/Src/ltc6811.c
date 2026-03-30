@@ -1,12 +1,16 @@
 #include "ltc6811.h"
 #include "spi.h"
 #include "gpio.h"
+#include "stm32f1xx_hal.h"
 #include <string.h>
 #include <stdint.h>
 
 static uint16_t pec15Table[256];
 
 void LTC6811_Init(void) {
+  // 初始化PEC15表
+  init_PEC15_Table();
+
   // 1. 唤醒
   LTC6811_wakeup();
   HAL_Delay(5);
@@ -18,7 +22,7 @@ void LTC6811_Init(void) {
     uint16_t vuv = 2500;
     uint16_t vov = 4200;
 
-    config[ic][0] = 0x00;
+    config[ic][0] = 0x04;
     config[ic][1] = vuv & 0xFF;
     config[ic][2] = ((vuv >> 8) & 0x0F) | ((vov & 0x0F) << 4);
     config[ic][3] = (vov >> 4) & 0xFF;
@@ -34,7 +38,6 @@ void LTC6811_Init(void) {
 
   // 5. 启动ADC（整链一起）
   LTC6811_start_conversion();
-  HAL_Delay(3);
 }
 
 void LTC6811_write_config_all(uint8_t config[TOTAL_IC][6]) {
@@ -86,7 +89,8 @@ void LTC6811_send_cmd(uint16_t cmd) {
 
 void LTC6811_start_conversion(void) {
   LTC6811_wakeup();
-  LTC6811_cmd(CMD_ADCV >> 8, CMD_ADCV & 0xFF);
+  LTC6811_send_cmd(CMD_ADCV);
+  HAL_Delay(3);
 }
 
 int LTC6811_read_cells(uint16_t *cell) {
@@ -115,7 +119,8 @@ int LTC6811_read_cells(uint16_t *cell) {
 
     // 3. SPI通信
     CS_LOW();
-    HAL_SPI_TransmitReceive(&hspi1, tx, rx, sizeof(tx), 100);
+    uint8_t status = HAL_SPI_TransmitReceive(&hspi1, tx, rx, sizeof(tx), 100);
+    //HAL_SPI_TransmitReceive(&hspi1, tx, rx, sizeof(tx), 100);
     CS_HIGH();
 
     // 4. 解析每个IC
@@ -132,7 +137,7 @@ int LTC6811_read_cells(uint16_t *cell) {
         return -1;
 
       // 存入cell数组
-      for (int i = 0; i < TOTAL_IC; i++) {
+      for (int i = 0; i < 3; i++) {
         int cell_index = (TOTAL_IC - 1 - ic) * 12 + // IC顺序翻转
                          grp * 3 + i;
 
@@ -145,88 +150,70 @@ int LTC6811_read_cells(uint16_t *cell) {
 }
 
 uint16_t pec15_calc(uint8_t *data, int len) {
-  uint16_t remainder = 0x0010; // 初始值
-  int i;
+  uint16_t remainder = 0x0010;
 
-  for (i = 0; i < len; i++) {
+  for (int i = 0; i < len; i++) {
     uint8_t address = ((remainder >> 7) ^ data[i]) & 0xFF;
     remainder = (remainder << 8) ^ pec15Table[address];
   }
-  return remainder & 0x7FFF;
-}
 
-void spi_txrx(uint8_t *tx, uint8_t *rx, uint16_t len) {
-  CS_LOW();
-
-  // 添加小延时确保CS稳定
-  for (volatile int i = 0; i < 10; i++)
-    ;
-
-  // SPI模式3：CPOL=1, CPHA=1
-  // 时钟空闲为高，数据在下降沿输出，上升沿锁存
-  HAL_SPI_TransmitReceive(&hspi1, tx, rx, len, 1000);
-
-  CS_HIGH();
-
-  // 添加小延时
-  for (volatile int i = 0; i < 10; i++)
-    ;
+  return remainder << 1;
 }
 
 void LTC6811_wakeup(void) {
   CS_LOW();
   HAL_Delay(2);
   CS_HIGH();
-  HAL_Delay(5);
-}
-
-void LTC6811_cmd(uint8_t cmd0, uint8_t cmd1){
-  uint8_t buf[4];
-
-  buf[0] = cmd0;
-  buf[1] = cmd1;
-
-  // 修正：第一个参数应该是 buf 指针，不是长度
-  uint16_t pec = pec15_calc(buf, 2); // 修正这里
-  buf[2] = pec >> 8;
-  buf[3] = pec & 0xFF;
-
-  CS_LOW();
-  for (volatile int i = 0; i < 10; i++);
-  HAL_SPI_Transmit(&hspi1, buf, 4, 100);
-  for (volatile int i = 0; i < 10; i++);
-  CS_HIGH();
+  HAL_Delay(2);
 }
 
 void LTC6811_read_status(void) {
-  uint8_t tx[4];
-  uint8_t rx_buf[TOTAL_IC * 8 + 4];
+  uint8_t tx[4 + 8 * TOTAL_IC] = {0};
+  uint8_t rx[4 + 8 * TOTAL_IC];
 
-  // 读取状态寄存器组A (RDSTATA)
   tx[0] = CMD_RDSTATA >> 8;
   tx[1] = CMD_RDSTATA & 0xFF;
 
-  // 计算PEC
   uint16_t pec = pec15_calc(tx, 2);
   tx[2] = pec >> 8;
   tx[3] = pec & 0xFF;
 
-  // 发送命令并接收数据
   CS_LOW();
-  HAL_SPI_Transmit(&hspi1, tx, 4, 100);
-
-  for (int i = 0; i < TOTAL_IC; i++) {
-    HAL_SPI_Receive(&hspi1, &rx_buf[i * 8], 8, 100);
-  }
+  HAL_SPI_TransmitReceive(&hspi1, tx, rx, sizeof(tx), 100);
   CS_HIGH();
 
   // 检查PEC并解析状态
   for (int ic = 0; ic < TOTAL_IC; ic++) {
-    if (!check_pec(&rx_buf[ic * 8], 8)) {
+    if (!check_pec(&rx[ic * 8], 8)) {
       // 解析状态寄存器（示例：检查过压/欠压标志）
-      uint8_t *status = &rx_buf[ic * 8];
+      uint8_t *status = &rx[ic * 8];
       // 根据规格书解析状态位
       // 这里可以添加具体的状态解析代码
     }
+  }
+}
+
+uint8_t check_pec(uint8_t *data, int len) {
+  uint16_t received = (data[len - 2] << 8) | data[len - 1];
+  uint16_t calc = pec15_calc(data, len - 2);
+  return (received == calc);
+}
+
+// 初始化PEC15查找表，MCU上电时仅需调用一次
+void init_PEC15_Table(void) {
+  uint16_t remainder;
+  uint16_t i;
+  int bit;
+
+  for (i = 0; i < 256; i++) {
+    remainder = i << 7;
+    for (bit = 8; bit > 0; bit--) {
+      if (remainder & 0x4000) {
+        remainder = (remainder << 1) ^ 0x4599;
+      } else {
+        remainder <<= 1;
+      }
+    }
+    pec15Table[i] = remainder & 0x7FFF;
   }
 }

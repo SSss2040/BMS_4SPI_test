@@ -1,9 +1,15 @@
 #ifndef LTC6811_H
 #define LTC6811_H
 
+#include "dma.h"
+#include "gpio.h"
+#include "spi.h"
+#include "stm32f1xx_hal.h"
+#include "usart.h"
 #include <stdint.h>
 
-#define TOTAL_IC 3
+
+#define TOTAL_IC 1
 #define CELL_PER_IC 12
 #define TOTAL_CELL (TOTAL_IC * CELL_PER_IC)
 #define CS_LOW() HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_RESET)
@@ -32,9 +38,10 @@ void LTC6811_clear_status(void);
 void LTC6811_start_conversion(void);
 int LTC6811_read_cells(uint16_t *cell);
 uint16_t pec15_calc(uint8_t *data, int len);
+uint8_t check_pec(uint8_t *data, int len);
+void init_PEC15_Table(void);
 void spi_txrx(uint8_t *tx, uint8_t *rx, uint16_t len);
 void LTC6811_wakeup(void);
-void LTC6811_cmd(uint8_t cmd0, uint8_t cmd1);
 void LTC6811_read_status(void);
 void LTC6811_send_cmd(uint16_t cmd);
 

@@ -50,7 +50,7 @@ typedef struct
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define TOTAL_IC 3
+#define TOTAL_IC 1
 #define CELL_PER_IC 12
 #define TOTAL_CELL (TOTAL_IC * CELL_PER_IC)
 #define CS_LOW() HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_RESET)
@@ -92,7 +92,6 @@ uint8_t open_cnt[TOTAL_CELL] = {0};
 uint8_t spike_cnt[TOTAL_CELL] = {0};
 uint8_t comm_cnt = 0;
 uint8_t uart_dma_busy = 0;
-static uint16_t pec15Table[256];
 /* USER CODE END PV */
 
 /* Private function prototypes -----------------------------------------------*/
@@ -110,7 +109,6 @@ void uart_dma_transmit(const char *message);
 //void check_voltage_fault(uint16_t *raw);
 //void check_open_wire(uint16_t *raw);
 //void check_spike(uint16_t *raw);
-uint8_t check_pec(uint8_t *data, uint16_t len);
 //void BMS_FaultDetect(uint16_t *cell_raw);
 float raw_to_voltage(uint16_t raw);
 void LTC6811_clear_status(void);
@@ -131,37 +129,9 @@ void uart_dma_transmit(const char *message) {
   HAL_UART_Transmit_DMA(&huart1, (uint8_t *)message, strlen(message));
 }
 
-
-
-uint8_t check_pec(uint8_t *data, uint16_t len) {
-  uint16_t received = (data[len - 2] << 8) | data[len - 1];
-  uint16_t calc = pec15_calc(data, len - 2);
-
-  return (received == calc);
-}
-
 float raw_to_voltage(uint16_t raw) {
   // LTC6811电压测量分辨率：1mV/LSB
   return raw * 0.0001f;
-}
-
-// 初始化PEC15查找表，MCU上电时仅需调用一次
-void init_PEC15_Table(void) {
-  uint16_t remainder;
-  uint16_t i;
-  int bit;
-
-  for (i = 0; i < 256; i++) {
-    remainder = i << 7;
-    for (bit = 8; bit > 0; bit--) {
-      if (remainder & 0x4000) {
-        remainder = (remainder << 1) ^ 0x4599;
-      } else {
-        remainder <<= 1;
-      }
-    }
-    pec15Table[i] = remainder & 0x7FFF;
-  }
 }
 
 /* USER CODE END 0 */
@@ -199,8 +169,9 @@ int main(void)
   MX_SPI1_Init();
   MX_USART1_UART_Init();
   /* USER CODE BEGIN 2 */
-  // 初始化PEC15查找表
-  init_PEC15_Table();
+
+  
+
   // 初始化LTC6811
   LTC6811_Init();
 
@@ -219,7 +190,6 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1) {
     LTC6811_start_conversion();
-    HAL_Delay(3);
     // 读取15节电池
     if (LTC6811_read_cells(cell_raw) == 0)
     {
@@ -277,7 +247,7 @@ int main(void)
       }
     }
 
-    HAL_Delay(100); // 1秒读取一次
+    HAL_Delay(1000);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

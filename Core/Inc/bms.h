@@ -3,7 +3,9 @@
 
 #include <stdint.h>
 
-#define TOTAL_CELL 12
+#define TOTAL_IC 1
+#define CELL_PER_IC 12
+#define TOTAL_CELL (TOTAL_IC * CELL_PER_IC)
 #define OV_THRESHOLD 4.20f
 #define UV_THRESHOLD 2.50f
 #define SPIKE_THRESHOLD 0.5f
