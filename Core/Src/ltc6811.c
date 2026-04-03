@@ -19,15 +19,18 @@ void LTC6811_Init(void) {
   uint8_t config[TOTAL_IC][6];
 
   for (int ic = 0; ic < TOTAL_IC; ic++) {
-    uint16_t vuv = 2500;
-    uint16_t vov = 4200;
+    // 计算VUV和VOV：比较电压 = (VUV/VOV + 1) * 16 * 100µV
+    // VUV = floor((UV电压 / 0.0016) - 1)
+    // VOV = floor((OV电压 / 0.0016) - 1)
+    uint16_t vuv = (uint16_t)((UV_THRESHOLD / 0.0016f) - 1); // UV_THRESHOLD = 2.50f V
+    uint16_t vov = (uint16_t)((OV_THRESHOLD / 0.0016f) ); // OV_THRESHOLD = 4.20f V
 
-    config[ic][0] = 0x04;
-    config[ic][1] = vuv & 0xFF;
-    config[ic][2] = ((vuv >> 8) & 0x0F) | ((vov & 0x0F) << 4);
-    config[ic][3] = (vov >> 4) & 0xFF;
-    config[ic][4] = 0x00;
-    config[ic][5] = 0x00;
+    config[ic][0] = 0x04; // ADCOPT=1 (14kHz/3kHz模式), REFON=0, GPIO5-1=0
+    config[ic][1] = vuv & 0xFF; // VUV[7:0]
+    config[ic][2] = ((vuv >> 8) & 0x0F) | ((vov & 0x0F) << 4); // VUV[11:8] | VOV[3:0]
+    config[ic][3] = (vov >> 4) & 0xFF; // VOV[11:4]
+    config[ic][4] = 0x00; // DCC8-1 = 0 (无放电)
+    config[ic][5] = 0x00; // DCTO[3:0]=0 (放电超时禁用), DCC12-9=0
   }
 
   // 3. 写配置（一次性写3颗）
@@ -120,8 +123,11 @@ int LTC6811_read_cells(uint16_t *cell) {
     // 3. SPI通信
     CS_LOW();
     uint8_t status = HAL_SPI_TransmitReceive(&hspi1, tx, rx, sizeof(tx), 100);
-    //HAL_SPI_TransmitReceive(&hspi1, tx, rx, sizeof(tx), 100);
     CS_HIGH();
+
+    if (status != HAL_OK) {
+      return -2; // SPI通信错误
+    }
 
     // 4. 解析每个IC
     for (int ic = 0; ic < TOTAL_IC; ic++) {
@@ -184,12 +190,14 @@ void LTC6811_read_status(void) {
 
   // 检查PEC并解析状态
   for (int ic = 0; ic < TOTAL_IC; ic++) {
-    if (!check_pec(&rx[ic * 8], 8)) {
-      // 解析状态寄存器（示例：检查过压/欠压标志）
-      uint8_t *status = &rx[ic * 8];
-      // 根据规格书解析状态位
-      // 这里可以添加具体的状态解析代码
+    if (!check_pec(&rx[4 + ic * 8], 8)) {
+      // PEC校验失败，跳过此IC
+      continue;
     }
+    // 解析状态寄存器（示例：检查过压/欠压标志）
+    uint8_t *status = &rx[4 + ic * 8];
+    // 根据规格书解析状态位
+    // 这里可以添加具体的状态解析代码
   }
 }
 

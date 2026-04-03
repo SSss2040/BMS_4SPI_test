@@ -20,10 +20,8 @@
 #include "main.h"
 #include "dma.h"
 #include "spi.h"
-#include "stm32f1xx_hal.h"
 #include "usart.h"
 #include "gpio.h"
-
 
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
@@ -64,14 +62,9 @@ typedef struct
 
 #define CMD_WRCFGA 0x001  // 写入配置寄存器组A
 #define CMD_RDCFGA 0x002  // 读取配置寄存器组A
-#define CMD_RDCVA 0x0004
-#define CMD_RDCVB 0x0006
-#define CMD_RDCVC 0x0008
-#define CMD_RDCVD 0x000A
 #define CMD_RDSTATA 0x010 // 读取状态寄存器组A
 #define CMD_RDSTATB 0x012 // 读取状态寄存器组B
 #define CMD_CLRSTAT 0x713 // 清除所有状态寄存器故障标志位
-#define CMD_ADCV 0x04c0    // 启动所有电池单体电压测量
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -234,7 +227,8 @@ int main(void)
 
       snprintf(buffer, sizeof(buffer), "----------------------\r\n");
       uart_dma_transmit(buffer);
-    } else {
+    }
+    else {
       char buffer[64];
       snprintf(buffer, sizeof(buffer), "LTC6811 Read Error!\r\n");
       uart_dma_transmit(buffer);
@@ -247,7 +241,7 @@ int main(void)
       }
     }
 
-    HAL_Delay(1000);
+    HAL_Delay(200);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -286,7 +280,7 @@ void SystemClock_Config(void)
   RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
   RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
   RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
-  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV1;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV4;
 
   if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
   {
