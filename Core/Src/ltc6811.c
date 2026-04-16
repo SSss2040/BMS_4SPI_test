@@ -180,8 +180,10 @@ int LTC6811_read_aux(uint16_t *aux) {
 
       uint16_t calc = pec15_calc(data, 6);
       uint16_t recv = (data[6] << 8) | data[7];
-      if (calc != recv)
-        return -1;
+      if (calc != recv) {
+        // PEC 校验失败，返回详细错误码：组号 + IC号 + 1
+        return -(grp * TOTAL_IC + ic + 1);
+      }
 
       for (int i = 0; i < 3; i++) {
         int aux_index = (TOTAL_IC - 1 - ic) * 6 + grp * 3 + i;

@@ -98,6 +98,8 @@ void LTC6811_start_conversion(void);
 
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart);
+
 void uart_dma_transmit(const char *message) {
   // 等待上一次传输完成
   uint32_t timeout = 1000; // 1秒超时
@@ -107,13 +109,19 @@ void uart_dma_transmit(const char *message) {
 
   uart_dma_busy = 1;
   HAL_UART_Transmit_DMA(&huart1, (uint8_t *)message, strlen(message));
+
+  // 等待当前传输完成，确保 message 内容在 DMA 传输期间仍然有效
+  timeout = 1000;
+  while (uart_dma_busy && timeout--) {
+    HAL_Delay(1);
+  }
 }
 
-float raw_to_voltage(uint16_t raw) {
-  // LTC6811电压测量分辨率：1mV/LSB
-  return raw * 0.0001f;
+void HAL_UART_TxCpltCallback(UART_HandleTypeDef *huart) {
+  if (huart->Instance == USART1) {
+    uart_dma_busy = 0;
+  }
 }
-
 /* USER CODE END 0 */
 
 /**
@@ -208,21 +216,43 @@ int main(void)
       uart_dma_transmit(buffer);
 
       for (int i = 0; i < TOTAL_CELL; i++) {
-        float voltage = cell_raw[i] * 0.0001f;
-        snprintf(buffer, sizeof(buffer), "Cell %02d: %.4f V\r\n", i + 1, voltage);
+        unsigned int raw = cell_raw[i];
+        unsigned int volts = raw / 10000;
+        unsigned int frac = raw % 10000;
+        snprintf(buffer, sizeof(buffer), "Cell %02d: %u.%04u V\r\n", i + 1, volts, frac);
         uart_dma_transmit(buffer);
       }
 
       float temperature_c = 0.0f;
-      if (Temperature_ReadGPIO4(&temperature_c) == 0) {
-        snprintf(buffer, sizeof(buffer), "GPIO4 Temperature: %.2f C\r\n", temperature_c);
+      int temp_result = Temperature_ReadGPIO4(&temperature_c);
+      if (temp_result == 0) {
+        int temp100 = (int)(temperature_c * 100.0f + (temperature_c >= 0 ? 0.5f : -0.5f));
+        int temp_int = temp100 / 100;
+        int temp_frac = temp100 % 100;
+        if (temp_frac < 0) {
+          temp_frac = -temp_frac;
+        }
+        snprintf(buffer, sizeof(buffer), "GPIO4 Temperature: %d.%02d C\r\n", temp_int, temp_frac);
       } else {
-        snprintf(buffer, sizeof(buffer), "GPIO4 Temperature Read Error\r\n");
+        if (temp_result == -2) {
+          snprintf(buffer, sizeof(buffer), "GPIO4 Temperature Read Error: Raw value is 0\r\n");
+        } else if (temp_result == -3) {
+          snprintf(buffer, sizeof(buffer), "GPIO4 Temperature Read Error: Invalid temperature (NaN)\r\n");
+        } else if (temp_result < 0) {
+          // PEC 失败，temp_result = -(grp * TOTAL_IC + ic + 1)
+          int error_code = -temp_result - 1;
+          int grp = error_code / TOTAL_IC;
+          int ic = error_code % TOTAL_IC;
+          snprintf(buffer, sizeof(buffer), "GPIO4 Temperature Read Error: PEC failure in group %d, IC %d\r\n", grp, ic);
+        } else {
+          snprintf(buffer, sizeof(buffer), "GPIO4 Temperature Read Error: Unknown error %d\r\n", temp_result);
+        }
       }
       uart_dma_transmit(buffer);
 
       snprintf(buffer, sizeof(buffer), "----------------------\r\n");
       uart_dma_transmit(buffer);
+      
     }
     else {
       char buffer[64];
@@ -237,7 +267,9 @@ int main(void)
       }
     }
 
-    HAL_Delay(100);
+    
+
+    HAL_Delay(1000);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

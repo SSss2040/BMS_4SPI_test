@@ -17,8 +17,12 @@ int Temperature_ReadGPIO4(float *temperature_c) {
   uint16_t aux[6] = {0};
 
   LTC6811_start_aux_conversion();
-  if (LTC6811_read_aux(aux) != 0) {
-    return -1;
+  int aux_result = LTC6811_read_aux(aux);
+  if (aux_result != 0) {
+    // 添加调试输出：打印 aux_result 和可能的 PEC 信息
+    // 注意：这里需要 uart_dma_transmit 函数，但 temperature.c 可能没有包含
+    // 临时返回错误码，建议在 main.c 中处理
+    return aux_result; // 返回 -1 表示 PEC 失败
   }
 
   uint16_t raw = aux[GPIO4_AUX_INDEX];
