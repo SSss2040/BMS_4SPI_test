@@ -33,6 +33,7 @@
 #include <math.h>
 #include "ltc6811.h"
 #include "bms.h"
+#include "temperature.h"
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -50,28 +51,7 @@ typedef struct
 
 /* Private define ------------------------------------------------------------*/
 /* USER CODE BEGIN PD */
-#define TOTAL_IC 1
-#define CELL_PER_IC 12
-#define TOTAL_CELL (TOTAL_IC * CELL_PER_IC)
-#define CS_LOW() HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_RESET)
-#define CS_HIGH() HAL_GPIO_WritePin(SPI_CS_GPIO_Port, SPI_CS_Pin, GPIO_PIN_SET)
-#define OV_THRESHOLD 4.20f
-#define UV_THRESHOLD 2.50f
-#define SPIKE_THRESHOLD 0.5f
-#define FAULT_COUNT_TH 3   // 连续3次触发
-#define RECOVER_COUNT_TH 3 // 连续3次恢复
-#define COMM_FAULT_TH 3
 
-#define CMD_WRCFGA 0x001  // 写入配置寄存器组A
-#define CMD_RDCFGA 0x002  // 读取配置寄存器组A
-#define CMD_RDCVA 0x0004
-#define CMD_RDCVB 0x0006
-#define CMD_RDCVC 0x0008
-#define CMD_RDCVD 0x000A
-#define CMD_RDSTATA 0x010 // 读取状态寄存器组A
-#define CMD_RDSTATB 0x012 // 读取状态寄存器组B
-#define CMD_CLRSTAT 0x713 // 清除所有状态寄存器故障标志位
-#define CMD_ADCV 0x04c0    // 启动所有电池单体电压测量
 /* USER CODE END PD */
 
 /* Private macro -------------------------------------------------------------*/
@@ -174,6 +154,7 @@ int main(void)
 
   // 初始化LTC6811
   LTC6811_Init();
+  Temperature_Init();
 
   // 初始化变量
   memset(cell_raw, 0, sizeof(cell_raw));
@@ -232,9 +213,18 @@ int main(void)
         uart_dma_transmit(buffer);
       }
 
+      float temperature_c = 0.0f;
+      if (Temperature_ReadGPIO4(&temperature_c) == 0) {
+        snprintf(buffer, sizeof(buffer), "GPIO4 Temperature: %.2f C\r\n", temperature_c);
+      } else {
+        snprintf(buffer, sizeof(buffer), "GPIO4 Temperature Read Error\r\n");
+      }
+      uart_dma_transmit(buffer);
+
       snprintf(buffer, sizeof(buffer), "----------------------\r\n");
       uart_dma_transmit(buffer);
-    } else {
+    }
+    else {
       char buffer[64];
       snprintf(buffer, sizeof(buffer), "LTC6811 Read Error!\r\n");
       uart_dma_transmit(buffer);
@@ -247,7 +237,7 @@ int main(void)
       }
     }
 
-    HAL_Delay(1000);
+    HAL_Delay(100);
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */

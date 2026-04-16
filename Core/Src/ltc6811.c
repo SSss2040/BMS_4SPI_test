@@ -19,18 +19,20 @@ void LTC6811_Init(void) {
   uint8_t config[TOTAL_IC][6];
 
   for (int ic = 0; ic < TOTAL_IC; ic++) {
-    uint16_t vuv = 2500;
-    uint16_t vov = 4200;
+    uint16_t vuv =
+        (uint16_t)((UV_THRESHOLD / 0.0016f) - 1); // UV_THRESHOLD = 2.50f V
+    uint16_t vov =
+        (uint16_t)((OV_THRESHOLD / 0.0016f)); // OV_THRESHOLD = 4.20f V
 
-    config[ic][0] = 0x04;
-    config[ic][1] = vuv & 0xFF;
-    config[ic][2] = ((vuv >> 8) & 0x0F) | ((vov & 0x0F) << 4);
-    config[ic][3] = (vov >> 4) & 0xFF;
-    config[ic][4] = 0x00;
-    config[ic][5] = 0x00;
+    config[ic][0] = 0x06;       // ADCOPT=1 (14kHz/3kHz模式), REFON=1, GPIO5-1=0
+    config[ic][1] = vuv & 0xFF; // VUV[7:0]
+    config[ic][2] =
+        ((vuv >> 8) & 0x0F) | ((vov & 0x0F) << 4); // VUV[11:8] | VOV[3:0]
+    config[ic][3] = (vov >> 4) & 0xFF;             // VOV[11:4]
+    config[ic][4] = 0x00;                          // DCC8-1 = 0 (无放电)
+    config[ic][5] = 0x00; // DCTO[3:0]=0 (放电超时禁用), DCC12-9=0
   }
 
-  // 3. 写配置（一次性写3颗）
   LTC6811_write_config_all(config);
 
   // 4. 清状态
@@ -94,14 +96,16 @@ void LTC6811_start_conversion(void) {
 }
 
 int LTC6811_read_cells(uint16_t *cell) {
+
+
   uint8_t tx[4 + 8 * TOTAL_IC];
   uint8_t rx[4 + 8 * TOTAL_IC];
 
   const uint16_t cmds[4] = {
-      0x0004, // RDCVA
-      0x0006, // RDCVB
-      0x0008, // RDCVC
-      0x000A  // RDCVD
+      CMD_RDCVA,
+      CMD_RDCVB,
+      CMD_RDCVC,
+      CMD_RDCVD
   };
 
   for (int grp = 0; grp < 4; grp++) {
@@ -119,8 +123,7 @@ int LTC6811_read_cells(uint16_t *cell) {
 
     // 3. SPI通信
     CS_LOW();
-    uint8_t status = HAL_SPI_TransmitReceive(&hspi1, tx, rx, sizeof(tx), 100);
-    //HAL_SPI_TransmitReceive(&hspi1, tx, rx, sizeof(tx), 100);
+    HAL_SPI_TransmitReceive(&hspi1, tx, rx, sizeof(tx), 100);
     CS_HIGH();
 
     // 4. 解析每个IC
@@ -147,6 +150,53 @@ int LTC6811_read_cells(uint16_t *cell) {
   }
 
   return 0;
+}
+
+int LTC6811_read_aux(uint16_t *aux) {
+  uint8_t tx[4 + 8 * TOTAL_IC];
+  uint8_t rx[4 + 8 * TOTAL_IC];
+
+  const uint16_t cmds[2] = {
+      CMD_RDAUXA,
+      CMD_RDAUXB
+  };
+
+  for (int grp = 0; grp < 2; grp++) {
+    memset(tx, 0, sizeof(tx));
+
+    tx[0] = cmds[grp] >> 8;
+    tx[1] = cmds[grp] & 0xFF;
+    uint16_t pec = pec15_calc(tx, 2);
+    tx[2] = pec >> 8;
+    tx[3] = pec & 0xFF;
+
+    CS_LOW();
+    HAL_SPI_TransmitReceive(&hspi1, tx, rx, sizeof(tx), 100);
+    CS_HIGH();
+
+    for (int ic = 0; ic < TOTAL_IC; ic++) {
+      int rx_offset = 4 + ic * 8;
+      uint8_t *data = &rx[rx_offset];
+
+      uint16_t calc = pec15_calc(data, 6);
+      uint16_t recv = (data[6] << 8) | data[7];
+      if (calc != recv)
+        return -1;
+
+      for (int i = 0; i < 3; i++) {
+        int aux_index = (TOTAL_IC - 1 - ic) * 6 + grp * 3 + i;
+        aux[aux_index] = (data[2 * i + 1] << 8) | data[2 * i];
+      }
+    }
+  }
+
+  return 0;
+}
+
+void LTC6811_start_aux_conversion(void) {
+  LTC6811_wakeup();
+  LTC6811_send_cmd(CMD_ADAX);
+  HAL_Delay(10);
 }
 
 uint16_t pec15_calc(uint8_t *data, int len) {
@@ -184,9 +234,9 @@ void LTC6811_read_status(void) {
 
   // 检查PEC并解析状态
   for (int ic = 0; ic < TOTAL_IC; ic++) {
-    if (!check_pec(&rx[ic * 8], 8)) {
+    if (!check_pec(&rx[4 + ic * 8], 8)) {
       // 解析状态寄存器（示例：检查过压/欠压标志）
-      uint8_t *status = &rx[ic * 8];
+      uint8_t *status = &rx[4 + ic * 8];
       // 根据规格书解析状态位
       // 这里可以添加具体的状态解析代码
     }
@@ -214,6 +264,6 @@ void init_PEC15_Table(void) {
         remainder <<= 1;
       }
     }
-    pec15Table[i] = remainder & 0x7FFF;
+    pec15Table[i] = remainder & 0xFFFF;
   }
 }

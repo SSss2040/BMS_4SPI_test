@@ -21,22 +21,27 @@
 #define RECOVER_COUNT_TH 3 // 连续3次恢复
 #define COMM_FAULT_TH 3
 
-#define CMD_WRCFGA 0x001  // 写入配置寄存器组A
-#define CMD_RDCFGA 0x002  // 读取配置寄存器组A
+#define CMD_WRCFGA 0x0001  // 写入配置寄存器组A
+#define CMD_RDCFGA 0x0002  // 读取配置寄存器组A
 #define CMD_RDCVA 0x0004
 #define CMD_RDCVB 0x0006
 #define CMD_RDCVC 0x0008
 #define CMD_RDCVD 0x000A
-#define CMD_RDSTATA 0x010 // 读取状态寄存器组A
-#define CMD_RDSTATB 0x012 // 读取状态寄存器组B
-#define CMD_CLRSTAT 0x713 // 清除所有状态寄存器故障标志位
-#define CMD_ADCV 0x04c0    // 启动所有电池单体电压测量
+#define CMD_RDSTATA 0x0010 // 读取状态寄存器组A
+#define CMD_RDSTATB 0x0012 // 读取状态寄存器组B
+#define CMD_CLRSTAT 0x0713 // 清除所有状态寄存器故障标志位
+#define CMD_ADCV 0x0360    // 启动所有电池单体电压测量
+#define CMD_ADAX 0x0460    // 启动所有辅助GPIO/AUX电压测量
+#define CMD_RDAUXA 0x000C  // 读取辅助寄存器组A
+#define CMD_RDAUXB 0x000E  // 读取辅助寄存器组B
 
 void LTC6811_Init(void);
 void LTC6811_write_config_all(uint8_t config[TOTAL_IC][6]);
 void LTC6811_clear_status(void);
 void LTC6811_start_conversion(void);
+void LTC6811_start_aux_conversion(void);
 int LTC6811_read_cells(uint16_t *cell);
+int LTC6811_read_aux(uint16_t *aux);
 uint16_t pec15_calc(uint8_t *data, int len);
 uint8_t check_pec(uint8_t *data, int len);
 void init_PEC15_Table(void);
